@@ -1,0 +1,140 @@
+- name: Déploiement d'une application WAR sur Tomcat
+  hosts: tomcat_servers
+  become: yes
+  vars:
+    tomcat_version: 9.0.53
+    tomcat_install_dir: /opt/tomcat
+    jfrog_war_url: "https://....." #url repo jFog
+    war_name: "dptweb.war"
+    jfrog_username: "xx....." #Username Jfrog
+    jfrog_password: "xx....." #Token Jfrog
+    tomcat_webapps: "{{ tomcat_install_dir }}/webapps"
+    config_dest: "{{ tomcat_webapps }}/config"
+
+  tasks:
+    - name: Installer les dépendances nécessaires sur Debian/Ubuntu
+      apt:
+        name: ["openjdk-11-jdk", "wget", "unzip"]
+        state: present
+      when: ansible_os_family == "Debian"
+
+    - name: Installer les dépendances nécessaires sur Amazon Linux / RHEL
+      dnf:
+        name: ["java-11-amazon-corretto", "wget", "unzip"]
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Créer l'utilisateur Tomcat
+      user:
+        name: tomcat
+        shell: /bin/false
+        create_home: no
+
+    - name: Télécharger et installer Tomcat
+      get_url:
+        url: "https://archive.apache.org/dist/tomcat/tomcat-9/v{{ tomcat_version }}/bin/apache-tomcat-{{ tomcat_version }}.tar.gz"
+        dest: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
+
+    - name: Extraire Tomcat
+      unarchive:
+        src: "/tmp/apache-tomcat-{{ tomcat_version }}.tar.gz"
+        dest: "/opt/"
+        remote_src: yes
+
+    - name: Renommer Tomcat
+      command: mv /opt/apache-tomcat-{{ tomcat_version }} {{ tomcat_install_dir }}
+      args:
+        creates: "{{ tomcat_install_dir }}"
+
+    - name: Définir les permissions
+      file:
+        path: "{{ tomcat_install_dir }}"
+        owner: ec2-user
+        group: ec2-user
+        mode: "0755"
+        recurse: yes
+
+    - name: Télécharger le fichier WAR depuis JFrog
+      get_url:
+        url: "{{ jfrog_war_url }}"
+        dest: "{{ tomcat_webapps }}/{{ war_name }}"
+        mode: "0644"
+        url_username: "{{ jfrog_username }}"
+        url_password: "{{ jfrog_password }}"
+
+    - name: Renommer ROOT en ROOT_backup s'il existe
+      command: mv {{ tomcat_webapps }}/ROOT {{ tomcat_webapps }}/ROOT_backup
+      args:
+        removes: "{{ tomcat_webapps }}/ROOT"
+      ignore_errors: yes  # Ne pas s'arrêter si ROOT n'existe pas
+
+    - name: Déployer dptweb comme ROOT
+      command: mv {{ tomcat_webapps }}/{{ war_name }} {{ tomcat_webapps }}/ROOT.war
+
+
+    - name: Charger les variables depuis application_properties.yml
+      include_vars:
+        file: application_properties.yml
+        name: app_conf
+    - name: Créer le dossier de config externe dans webapps
+      file:
+       path: "{{ tomcat_webapps }}/config"
+       state: directory
+       owner: ec2-user
+       group: ec2-user
+       mode: '0755'
+
+    - name: Déployer application_properties.yml
+      copy:
+        src: application_properties.yml
+        dest: "{{config_dest}}/application_properties.yml"
+        owner: ec2-user
+        group: ec2-user
+        mode: '0644'
+
+    - name: Générer application.properties depuis template
+      template:
+        src: application.properties.j2
+        dest: "{{config_dest}}/application.properties"
+        owner: ec2-user
+        group: ec2-user
+        mode: '0644'
+
+    - name: Créer un service systemd pour Tomcat
+      copy:
+        dest: /etc/systemd/system/tomcat.service
+        content: |
+          [Unit]
+          Description=Tomcat Server
+          After=network.target
+
+          [Service]
+          Type=forking
+          User=ec2-user
+          Group=ec2-user
+          UMask=0007
+          Environment=JAVA_HOME=/usr/lib/jvm/jre
+          Environment=CATALINA_PID=/opt/tomcat/temp/tomcat.pid
+          Environment=CATALINA_HOME=/opt/tomcat
+          Environment=CATALINA_BASE=/opt/tomcat
+          Environment='CATALINA_OPTS=-Xms512M -Xmx1024M -server -XX:+UseParallelGC'
+          Environment='JAVA_OPTS=-Djava.awt.headless=true -Djava.security.egd=file:/dev/./urandom -Dspring.config.location=file:{{config_dest}}/application.properties'
+          ExecStart={{ tomcat_install_dir }}/bin/startup.sh
+          ExecStop={{ tomcat_install_dir }}/bin/shutdown.sh
+          RestartSec=10
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Reload systemd
+
+    - name: Démarrer et activer Tomcat
+      systemd:
+        name: tomcat
+        enabled: yes
+        state: restarted
+
+  handlers:
+    - name: Reload systemd
+      command: systemctl daemon-reload
+

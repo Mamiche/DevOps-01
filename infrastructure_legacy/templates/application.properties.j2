@@ -1,0 +1,7 @@
+spring.mvc.view.prefix=/pages/
+spring.mvc.view.suffix=.jsp
+
+spring.datasource.url=jdbc:mariadb://{{ app_conf.db_host }}:{{ app_conf.db_port }}/{{ app_conf.db_name }}
+spring.datasource.username={{ app_conf.db_username }}
+spring.datasource.password={{ app_conf.db_password }}
+spring.datasource.driver-class-name=org.mariadb.jdbc.Driver

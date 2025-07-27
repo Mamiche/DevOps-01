@@ -1,0 +1,5 @@
+db_username: "user"
+db_password: "passpass"
+db_host: "dptwebdb.cfyoy48im4h0.eu-west-3.rds.amazonaws.com"
+db_port: 3306
+db_name: "javaapp"
